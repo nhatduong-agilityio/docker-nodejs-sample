@@ -1,11 +1,20 @@
-name: CI/CD â Node.js Application with Docker
+name: CI/CD - Node.js Application with Docker
 
 on:
   push:
-    branches: [docker-example]
+    branches:
+      - docker-example
   pull_request:
-    branches: [docker-example]
-    types: [opened, synchronize, reopened]
+    branches:
+      - docker-example
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+env:
+  APP_DIR: docker-nodejs-sample
+  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKERHUB_PROJECT_NAME }}
 
 jobs:
   test:
@@ -20,7 +29,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres -d todoapp_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -29,28 +38,29 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Cache npm dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: ${{ runner.os }}-npm-
+          key: ${{ runner.os }}-npm-${{ hashFiles(format('{0}/**/package-lock.json', env.APP_DIR)) }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
       - name: Build test image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ env.APP_DIR }}
+          file: ${{ env.APP_DIR }}/Dockerfile
           target: test
           tags: nodejs-app-test:latest
-          platforms: linux/amd64
           load: true
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Run tests inside container
         run: |
@@ -72,41 +82,37 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
 
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Cache Docker layers
-        uses: actions/cache@v5
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: ${{ runner.os }}-buildx-
-
       - name: Extract metadata
         id: meta
         run: |
-          echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push multi-arch production image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ env.APP_DIR }}
+          file: ${{ env.APP_DIR }}/Dockerfile
           target: production
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKERHUB_PROJECT_NAME }}:latest
-            ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKERHUB_PROJECT_NAME }}:${{ steps.meta.outputs.SHORT_SHA }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.SHORT_SHA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
